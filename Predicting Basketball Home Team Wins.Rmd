@@ -1,0 +1,129 @@
+---
+title: "Predicting Basketball Home Team Wins"
+author: "Hanna Grossman and Citlally Reynoso"
+date: "12/8/2019"
+output: pdf_document
+---
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE, include=FALSE}
+#reading in the data
+data <- read.csv("data/train.csv")
+test <- read.csv("data/test.csv")
+
+##################################################################################
+#creating data.u without any repeated columns
+##################################################################################
+#identify the class type for every column 
+class.data <- character(length = nrow(data))
+for(i in 1:ncol(data)) {
+  class.data[i] <- class(data[ , i])
+}
+
+#remove those columns that aren't numeric so that we can transpose the data  
+data.u <- data[,- c(which(class.data == "factor"| class.data == "character"))]
+
+#create a data frame with no duplicate columns
+data.u <- as.data.frame(t(unique(t(data.u))))
+#reintroduce the columns that were factors/characters
+data.u <- cbind(data.u[, 1:2], data[,c(which(class.data == "factor"| class.data == "character"))], data.u[,3:151])
+
+
+
+##################################################################################
+#creating data.sub_prop with new vars: prop_HT, prop_VT, pts_diff, pts_win and no categorical vars
+##################################################################################
+
+library(dplyr)
+
+data.sub <- data.u[,-c(1,2, 8)]
+prop_dataVT <- data.sub %>% select(VT, HTWins) %>% group_by(VT) %>% summarize(prop_VT=(sum(HTWins=="No")/sum(HTWins=="Yes"|HTWins=="No")))
+#the higher the proportion, the better the team is 
+
+prop_dataHT <- data.sub %>% select(HT, HTWins) %>% group_by(HT) %>% summarize(prop_HT=(sum(HTWins=="Yes")/sum(HTWins=="Yes"|HTWins=="No")))
+
+data.sub_prop <- left_join(data.sub, prop_dataHT, by="HT")
+data.sub_prop <- left_join(data.sub_prop, prop_dataVT, by="VT")
+data.sub_prop2 <- data.sub_prop[,-c(2,3)]
+
+data.sub_prop3 <- data.sub_prop2[,-c(2,3)]
+
+##################################################################################
+#Best model 1  - Random Forest 
+##################################################################################
+library(randomForest)
+data.u$HTWins = factor(data.u$HTWins) 
+model_forest <- randomForest(HTWins~., data=data.u, mtry=ceiling(sqrt(ncol(data.u)-1)), importance=TRUE)
+#kaggle score: 0.66990
+
+##################################################################################
+#Best model 2 - XGBoost
+##################################################################################
+library(xgboost)
+data.sub_prop3_x <- data.sub_prop3[,-1]
+data.sub_prop3_x <- as.matrix(data.sub_prop3_x)
+label <- ifelse(data.sub_prop3$HTWins=="Yes", 1, 0)
+
+model_boost <- xgboost(data=data.sub_prop3_x, label=label, objective="binary:logistic", nrounds=250, eta=0.09, max_depth=6, verbose=0, min_child_weight=1, gamma=0, subsample=1, colsample_bytree=1, early_stopping_rounds = 10, eval_metric="error", silent=1)
+
+#kaggle score: 0.66626
+```
+
+# Introduction  
+We began the project with NCAA data from Kaggle, consisting of basketball statistics. This data consisted of 218 variables and 9520 observations. Our goal was to create a model that could predict whether the home team had won the game or not. From there we applied this model to our testing data to see how well our model performed.
+
+
+# Methods   
+- Step 1: First, we read in the training and testing data into R. 
+- Step 2: We then cleaned the data by deleting the columns that were repeated. 
+- Step 3: From there we began to fit models to the train data and explore what worked best on our particular data set. 
+    - Logistic regression, Random forest, XGBoost, Adaboost, LDA, QDA
+- Step 4: We observed that the random forest and XGBoost models performed best, so from there we worked to tune these models. 
+    - 4a: We tuned the following parameters using tuneRF: mtry and ntree 
+    - 4b: We tuned the following parameters using xgb.train: nrounds, eta, max_depth, verbose, min_child_weight, gamma, subsample, colsample_bytree, early_stopping_rounds, eval_metric
+- Step 5: In addition, we created two new variables to add to our dataset for our XGBoost model. 
+    - We created two variables, one looking at the proportion of games that each team won at home, and the other being the proportion of games that each team won away from home. 
+
+
+
+# Results  
+Random Forest Model:
+
+model_forest <- randomForest(HTWins~., data=data.train, mtry=ceiling(sqrt(ncol(data.train)-1)), importance=TRUE)
+  
+  
+XGBoost Model: 
+
+model_boost <- xgboost(data=data.train.x, label=data.train.y, objective="binary:logistic", nrounds=250, eta=0.09, max_depth=6, verbose=0, min_child_weight=1, gamma=0, subsample=1, colsample_bytree=1, early_stopping_rounds = 10, eval_metric="error", silent=1)
+
+```{r, echo=FALSE, message=FALSE, warning = FALSE, fig.width=7, fig.height=3.5}
+#random forest model plots
+par(mfrow=c(2,1))
+imp <- as.data.frame(model_forest$importance)
+imp$rownames <- rownames(imp) 
+library(dplyr)
+imp <- imp %>% arrange(desc(MeanDecreaseAccuracy))
+imp <- imp[1:10, ]
+imp <- imp %>% arrange(MeanDecreaseAccuracy)
+imp$rownames <- factor(imp$rownames, levels=imp$rownames)
+
+library(ggplot2)
+mid <- mean(imp$MeanDecreaseAccuracy)
+ggplot(data=imp, aes(x=rownames, y=MeanDecreaseAccuracy)) + geom_bar(position="dodge", stat="identity", fill="blue") + coord_flip() + ggtitle("Random Forest Mean Decrease Accuracy Per Predictor") 
+
+#Plots for XGBoost model
+library(DiagrammeR)
+importanceRaw <- xgb.importance( model = model_boost)
+
+importanceRaw <- importanceRaw[1:10,]
+importanceRaw <- importanceRaw %>% arrange(Gain)
+importanceRaw$Feature <- factor(importanceRaw$Feature , levels=importanceRaw$Feature )
+ggplot(data=importanceRaw, aes(x=Feature, y=Gain)) + geom_bar(position="dodge", stat="identity", fill="blue") + coord_flip()  + ggtitle("XGBoost Gain Per Predictor")
+```
+
+
+# Conclusion and Next Steps  
+In conclusion, we did see that our random forest model performed best, both on the subsetted and full test data in Kaggle. However, we do believe with more time we would be able to further tune our XGBoost model to further improve our accuracy.
+  
+In the future, we would bring in external data that would provide us with the rankings for the basketball teams for each year. This would improve the model because team rankings would be strongly correlated with which team wins the game.
+We could look into creating new predictors from the variables available in our current data set. This would allow us to create a more concise and possibly more accurate model. 
+
